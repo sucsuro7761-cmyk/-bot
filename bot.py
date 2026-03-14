@@ -133,16 +133,6 @@ async def on_thread_create(thread):
         view=view
     )
 
-    # 募集テンプレート
-    await thread.send(
-        "📋 **募集テンプレート**\n\n"
-        "ゲーム：\n"
-        "人数：\n"
-        "VC：あり / なし\n"
-        "ひとこと："
-    )
-
-
 @bot.event
 async def on_message(message):
 
