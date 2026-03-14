@@ -62,6 +62,19 @@ class RecruitView(discord.ui.View):
 
         if data["max_members"] and len(data["members"]) >= data["max_members"]:
             return await interaction.response.send_message("この募集は満員です", ephemeral=True)
+            thread = interaction.channel
+
+everyone = interaction.guild.default_role
+role = interaction.guild.get_role(PARTICIPANT_ROLE_ID)
+
+# everyone書き込み禁止
+await thread.set_permissions(everyone, send_messages=False)
+
+# 参加者ロール書き込み許可
+if role:
+    await thread.set_permissions(role, send_messages=True)
+
+await thread.send("🔒 参加者のみ書き込み可能になりました")
 
         data["members"].append(user.id)
         save_data(threads)
