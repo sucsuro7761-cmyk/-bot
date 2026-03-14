@@ -7,7 +7,8 @@ import json
 
 TOKEN = os.getenv("TOKEN")
 
-PARTICIPANT_ROLE_ID = 1482374373011882035
+# 参加者ロールID
+PARTICIPANT_ROLE_ID = 123456789012345678
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -41,6 +42,7 @@ threads = load_data()
 
 
 class RecruitView(discord.ui.View):
+
     def __init__(self, thread_id):
         super().__init__(timeout=None)
         self.thread_id = str(thread_id)
@@ -94,9 +96,7 @@ class RecruitView(discord.ui.View):
 
             await interaction.channel.send("🔒 募集スレッドをロックします")
 
-            thread = interaction.channel
-            await thread.edit(locked=True)
-
+            await interaction.channel.edit(locked=True)
 
     @discord.ui.button(label="落ち", style=discord.ButtonStyle.red)
     async def leave(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -216,20 +216,20 @@ async def check_threads():
                     f"🎮 **募集終了！**\n\n"
                     f"参加者\n{members_text}"
                 )
-                
-guild = thread.guild
-role = guild.get_role(PARTICIPANT_ROLE_ID)
 
-for uid in data["members"]:
-    member = guild.get_member(uid)
+                guild = thread.guild
+                role = guild.get_role(PARTICIPANT_ROLE_ID)
 
-    if member and role:
-        try:
-            await member.remove_roles(role)
-        except:
-            pass
+                for uid in data["members"]:
+                    member = guild.get_member(uid)
 
-await thread.send("🏷 参加者ロールを削除しました")
+                    if member and role:
+                        try:
+                            await member.remove_roles(role)
+                        except:
+                            pass
+
+                await thread.send("🏷 参加者ロールを削除しました")
 
                 await thread.edit(archived=True, locked=True)
 
