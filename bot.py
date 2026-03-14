@@ -24,7 +24,10 @@ def load_data():
         return {}
 
     with open(DATA_FILE, "r") as f:
-        return json.load(f)
+        try:
+            return json.load(f)
+        except:
+            return {}
 
 
 def save_data(data):
@@ -53,12 +56,27 @@ class RecruitView(discord.ui.View):
         if user.id in data["members"]:
             return await interaction.response.send_message("すでに参加しています", ephemeral=True)
 
+        # 満員チェック
+        if data["max_members"] and len(data["members"]) >= data["max_members"]:
+            return await interaction.response.send_message("この募集は満員です！", ephemeral=True)
+
         data["members"].append(user.id)
         save_data(threads)
 
-        await interaction.response.send_message(
-            f"✅ {user.mention} が参加しました！"
-        )
+        count = len(data["members"])
+
+        if data["max_members"]:
+            await interaction.channel.send(
+                f"✅ {user.mention} が参加しました！\n"
+                f"👥 現在 {count}/{data['max_members']} 人"
+            )
+
+            if count >= data["max_members"]:
+                await interaction.channel.send("🎉 **募集が満員になりました！**")
+        else:
+            await interaction.channel.send(f"✅ {user.mention} が参加しました！")
+
+        await interaction.response.defer()
 
     @discord.ui.button(label="落ち", style=discord.ButtonStyle.red)
     async def leave(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -76,9 +94,8 @@ class RecruitView(discord.ui.View):
         data["members"].remove(user.id)
         save_data(threads)
 
-        await interaction.response.send_message(
-            f"❌ {user.mention} が募集から抜けました"
-        )
+        await interaction.channel.send(f"❌ {user.mention} が募集から抜けました")
+        await interaction.response.defer()
 
 
 @bot.event
@@ -101,6 +118,7 @@ async def on_thread_create(thread):
         "last_activity": time.time(),
         "limit": DEFAULT_TIME,
         "members": [],
+        "max_members": None,
         "warned": False
     }
 
@@ -113,6 +131,15 @@ async def on_thread_create(thread):
         "参加する人はボタンを押してください！\n"
         "⏰ 60分活動がないと自動終了します。",
         view=view
+    )
+
+    # 募集テンプレート
+    await thread.send(
+        "📋 **募集テンプレート**\n\n"
+        "ゲーム：\n"
+        "人数：\n"
+        "VC：あり / なし\n"
+        "ひとこと："
     )
 
 
@@ -187,8 +214,26 @@ async def check_threads():
             save_data(threads)
 
 
-@bot.tree.command(name="延長", description="募集時間を延長します")
-@app_commands.describe(minutes="延長する分数")
+@bot.tree.command(name="人数", description="募集人数を設定")
+async def set_members(interaction: discord.Interaction, number: int):
+
+    if not isinstance(interaction.channel, discord.Thread):
+        return await interaction.response.send_message("スレッドで使用してください", ephemeral=True)
+
+    data = threads.get(str(interaction.channel.id))
+
+    if not data:
+        return await interaction.response.send_message("募集データがありません", ephemeral=True)
+
+    data["max_members"] = number
+    save_data(threads)
+
+    await interaction.response.send_message(
+        f"👥 募集人数を **{number}人** に設定しました！"
+    )
+
+
+@bot.tree.command(name="延長", description="募集時間を延長")
 async def extend(interaction: discord.Interaction, minutes: int):
 
     if not isinstance(interaction.channel, discord.Thread):
