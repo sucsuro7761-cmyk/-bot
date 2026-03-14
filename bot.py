@@ -217,7 +217,7 @@ async def check_threads():
                     f"参加者\n{members_text}"
                 )
                 
-                guild = thread.guild
+guild = thread.guild
 role = guild.get_role(PARTICIPANT_ROLE_ID)
 
 for uid in data["members"]:
