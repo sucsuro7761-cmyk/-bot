@@ -7,9 +7,11 @@ import json
 
 TOKEN = os.getenv("TOKEN")
 
+PARTICIPANT_ROLE_ID = 123456789012345678
+
 intents = discord.Intents.default()
 intents.message_content = True
-intents.guilds = True
+intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
@@ -56,27 +58,45 @@ class RecruitView(discord.ui.View):
         if user.id in data["members"]:
             return await interaction.response.send_message("すでに参加しています", ephemeral=True)
 
-        # 満員チェック
         if data["max_members"] and len(data["members"]) >= data["max_members"]:
-            return await interaction.response.send_message("この募集は満員です！", ephemeral=True)
+            return await interaction.response.send_message("この募集は満員です", ephemeral=True)
 
         data["members"].append(user.id)
         save_data(threads)
 
         count = len(data["members"])
 
-        if data["max_members"]:
-            await interaction.channel.send(
-                f"✅ {user.mention} が参加しました！\n"
-                f"👥 現在 {count}/{data['max_members']} 人"
-            )
+        await interaction.channel.send(f"✅ {user.mention} が参加しました")
 
-            if count >= data["max_members"]:
-                await interaction.channel.send("🎉 **募集が満員になりました！**")
-        else:
-            await interaction.channel.send(f"✅ {user.mention} が参加しました！")
+        if data["max_members"]:
+            await interaction.channel.send(f"👥 現在 {count}/{data['max_members']} 人")
 
         await interaction.response.defer()
+
+        # 満員処理
+        if data["max_members"] and count >= data["max_members"]:
+
+            await interaction.channel.send("🎉 **募集が満員になりました！**")
+
+            guild = interaction.guild
+            role = guild.get_role(PARTICIPANT_ROLE_ID)
+
+            for uid in data["members"]:
+                member = guild.get_member(uid)
+
+                if member and role:
+                    try:
+                        await member.add_roles(role)
+                    except:
+                        pass
+
+            await interaction.channel.send("🏷 参加者にロールを付与しました")
+
+            await interaction.channel.send("🔒 募集スレッドをロックします")
+
+            thread = interaction.channel
+            await thread.edit(locked=True)
+
 
     @discord.ui.button(label="落ち", style=discord.ButtonStyle.red)
     async def leave(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -95,6 +115,7 @@ class RecruitView(discord.ui.View):
         save_data(threads)
 
         await interaction.channel.send(f"❌ {user.mention} が募集から抜けました")
+
         await interaction.response.defer()
 
 
@@ -132,6 +153,7 @@ async def on_thread_create(thread):
         "⏰ 60分活動がないと自動終了します。",
         view=view
     )
+
 
 @bot.event
 async def on_message(message):
