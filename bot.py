@@ -62,31 +62,19 @@ class RecruitView(discord.ui.View):
 
         if data["max_members"] and len(data["members"]) >= data["max_members"]:
             return await interaction.response.send_message("この募集は満員です", ephemeral=True)
-            thread = interaction.channel
 
-everyone = interaction.guild.default_role
-role = interaction.guild.get_role(PARTICIPANT_ROLE_ID)
+        # ✅ 修正: defer() を最初に呼んでタイムアウトを防ぐ
+        await interaction.response.defer()
 
-# everyone書き込み禁止
-await thread.set_permissions(everyone, send_messages=False)
+        data["members"].append(user.id)
+        save_data(threads)
 
-# 参加者ロール書き込み許可
-if role:
-    await thread.set_permissions(role, send_messages=True)
+        count = len(data["members"])
 
-await thread.send("🔒 参加者のみ書き込み可能になりました")
-
-data["members"].append(user.id)
-save_data(threads)
-
-count = len(data["members"])
-
-await interaction.channel.send(f"✅ {user.mention} が参加しました")
+        await interaction.channel.send(f"✅ {user.mention} が参加しました")
 
         if data["max_members"]:
             await interaction.channel.send(f"👥 現在 {count}/{data['max_members']} 人")
-
-        await interaction.response.defer()
 
         # 満員処理
         if data["max_members"] and count >= data["max_members"]:
@@ -96,6 +84,7 @@ await interaction.channel.send(f"✅ {user.mention} が参加しました")
             guild = interaction.guild
             role = guild.get_role(PARTICIPANT_ROLE_ID)
 
+            # ✅ 修正: ロール付与
             for uid in data["members"]:
                 member = guild.get_member(uid)
 
@@ -106,6 +95,19 @@ await interaction.channel.send(f"✅ {user.mention} が参加しました")
                         pass
 
             await interaction.channel.send("🏷 参加者にロールを付与しました")
+
+            # ✅ 修正: パーミッション処理を満員ブロック内に移動、return後ではなく正しい場所に配置
+            thread = interaction.channel
+            everyone = interaction.guild.default_role
+
+            # everyone書き込み禁止
+            await thread.set_permissions(everyone, send_messages=False)
+
+            # 参加者ロール書き込み許可
+            if role:
+                await thread.set_permissions(role, send_messages=True)
+
+            await thread.send("🔒 参加者のみ書き込み可能になりました")
 
             await interaction.channel.send("🔒 募集スレッドをロックします")
 
