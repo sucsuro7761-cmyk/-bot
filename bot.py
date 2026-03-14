@@ -216,6 +216,20 @@ async def check_threads():
                     f"🎮 **募集終了！**\n\n"
                     f"参加者\n{members_text}"
                 )
+                
+                guild = thread.guild
+role = guild.get_role(PARTICIPANT_ROLE_ID)
+
+for uid in data["members"]:
+    member = guild.get_member(uid)
+
+    if member and role:
+        try:
+            await member.remove_roles(role)
+        except:
+            pass
+
+await thread.send("🏷 参加者ロールを削除しました")
 
                 await thread.edit(archived=True, locked=True)
 
