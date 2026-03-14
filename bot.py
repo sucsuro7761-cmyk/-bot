@@ -7,7 +7,7 @@ import json
 
 TOKEN = os.getenv("TOKEN")
 
-PARTICIPANT_ROLE_ID = 123456789012345678
+PARTICIPANT_ROLE_ID = 1482374373011882035
 
 intents = discord.Intents.default()
 intents.message_content = True
