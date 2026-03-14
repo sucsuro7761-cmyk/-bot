@@ -76,12 +76,12 @@ if role:
 
 await thread.send("🔒 参加者のみ書き込み可能になりました")
 
-        data["members"].append(user.id)
-        save_data(threads)
+data["members"].append(user.id)
+save_data(threads)
 
-        count = len(data["members"])
+count = len(data["members"])
 
-        await interaction.channel.send(f"✅ {user.mention} が参加しました")
+await interaction.channel.send(f"✅ {user.mention} が参加しました")
 
         if data["max_members"]:
             await interaction.channel.send(f"👥 現在 {count}/{data['max_members']} 人")
