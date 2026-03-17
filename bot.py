@@ -23,11 +23,10 @@ def init_db():
             modes TEXT DEFAULT '[]'
         )
     """)
-    # 既存テーブルにmodesカラムがない場合は追加
     try:
         c.execute("ALTER TABLE games ADD COLUMN modes TEXT DEFAULT '[]'")
     except sqlite3.OperationalError:
-        pass  # すでに存在する場合は無視
+        pass
 
     c.execute("""
         CREATE TABLE IF NOT EXISTS recruits (
@@ -42,7 +41,6 @@ def init_db():
             mode TEXT DEFAULT ''
         )
     """)
-    # 既存テーブルにmodeカラムがない場合は追加
     try:
         c.execute("ALTER TABLE recruits ADD COLUMN mode TEXT DEFAULT ''")
     except sqlite3.OperationalError:
@@ -162,7 +160,7 @@ def create_embed(recruit):
     )
     if mode:
         embed.add_field(name="🏷️ モード", value=mode, inline=False)
-    embed.add_field(name="👥 募集人数", value=f"{len(members)} / {recruit['limit']}", inline=False)
+    embed.add_field(name="👥 人数", value=f"{len(members)} / {recruit['limit']}", inline=False)
     embed.add_field(name="💬 一言", value=recruit["comment"], inline=False)
     embed.add_field(name="参加者", value=member_text, inline=False)
     return embed
@@ -177,8 +175,7 @@ async def game_autocomplete(interaction: discord.Interaction, current: str):
     ][:25]
 
 async def mode_autocomplete(interaction: discord.Interaction, current: str):
-    # interaction.namespace で他のオプションの現在値を取得
-    game_name = interaction.namespace.ゲーム
+    game_name = getattr(interaction.namespace, "ゲーム", None)
     if not game_name:
         return []
     game = db_get_game(game_name)
@@ -190,7 +187,7 @@ async def mode_autocomplete(interaction: discord.Interaction, current: str):
     ][:25]
 
 
-# ✅ 募集終了の確認ビュー（変更なし）
+# ✅ 募集終了の確認ビュー
 class ConfirmView(discord.ui.View):
 
     def __init__(self, message_id):
@@ -200,6 +197,7 @@ class ConfirmView(discord.ui.View):
     @discord.ui.button(label="✅ はい、終了する", style=discord.ButtonStyle.red)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
         recruit = db_get_recruit(self.message_id)
+
         if not recruit:
             return await interaction.response.send_message("募集データなし", ephemeral=True)
         if interaction.user.id != recruit["host"]:
@@ -233,15 +231,127 @@ class ConfirmView(discord.ui.View):
         await interaction.response.edit_message(content="キャンセルしました。", view=None)
 
 
+# ✅ 募集ビュー（全ボタン）
 class RecruitView(discord.ui.View):
 
-    def __init__(self, message_id):          
+    def __init__(self, message_id):
         super().__init__(timeout=None)
         self.message_id = str(message_id)
 
     @discord.ui.button(label="参加", style=discord.ButtonStyle.green)
-    async def join(self, ...):
-        ...
+    async def join(self, interaction: discord.Interaction, button: discord.ui.Button):
+        recruit = db_get_recruit(self.message_id)
+
+        if not recruit:
+            return await interaction.response.send_message("募集データなし", ephemeral=True)
+        if interaction.user.id in recruit["members"]:
+            return await interaction.response.send_message("すでに参加しています", ephemeral=True)
+        if len(recruit["members"]) >= recruit["limit"]:
+            return await interaction.response.send_message("満員です", ephemeral=True)
+
+        recruit["members"].append(interaction.user.id)
+        db_save_recruit(self.message_id, recruit)
+
+        embed = create_embed(recruit)
+        await interaction.message.edit(embed=embed, view=self)
+        await interaction.response.send_message("参加しました", ephemeral=True)
+
+    @discord.ui.button(label="落ち", style=discord.ButtonStyle.red)
+    async def leave(self, interaction: discord.Interaction, button: discord.ui.Button):
+        recruit = db_get_recruit(self.message_id)
+
+        if not recruit:
+            return await interaction.response.send_message("募集データなし", ephemeral=True)
+        if interaction.user.id not in recruit["members"]:
+            return await interaction.response.send_message("参加していません", ephemeral=True)
+
+        recruit["members"].remove(interaction.user.id)
+        db_save_recruit(self.message_id, recruit)
+
+        embed = create_embed(recruit)
+        await interaction.message.edit(embed=embed, view=self)
+        await interaction.response.send_message("募集から抜けました", ephemeral=True)
+
+    @discord.ui.button(label="スレッド作成", style=discord.ButtonStyle.blurple)
+    async def thread_create(self, interaction: discord.Interaction, button: discord.ui.Button):
+        recruit = db_get_recruit(self.message_id)
+
+        if interaction.user.id != recruit["host"]:
+            return await interaction.response.send_message("募集主のみ使用可能", ephemeral=True)
+        if recruit.get("thread_id"):
+            return await interaction.response.send_message("すでにスレッドが作成されています", ephemeral=True)
+
+        game = db_get_game(recruit["game"])
+        forum = bot.get_channel(game["forum_channel"])
+
+        thread = await forum.create_thread(
+            name=recruit["title"],
+            content=f"🎮 {recruit['title']} スレッド",
+            auto_archive_duration=60
+        )
+
+        recruit["thread_id"] = thread.thread.id
+        db_save_recruit(self.message_id, recruit)
+        await interaction.response.send_message("スレッド作成しました", ephemeral=True)
+
+    @discord.ui.button(label="スレッドを閉じる", style=discord.ButtonStyle.grey)
+    async def thread_close(self, interaction: discord.Interaction, button: discord.ui.Button):
+        recruit = db_get_recruit(self.message_id)
+
+        if not recruit:
+            return await interaction.response.send_message("募集データなし", ephemeral=True)
+        if interaction.user.id != recruit["host"]:
+            return await interaction.response.send_message("募集主のみ使用可能", ephemeral=True)
+
+        thread_id = recruit.get("thread_id")
+        if not thread_id:
+            return await interaction.response.send_message("スレッドがまだ作成されていません", ephemeral=True)
+
+        thread = bot.get_channel(thread_id)
+        if not thread:
+            return await interaction.response.send_message("スレッドが見つかりません", ephemeral=True)
+
+        await thread.edit(archived=True)
+        await interaction.response.send_message("スレッドをアーカイブしました", ephemeral=True)
+
+    @discord.ui.button(label="スレッドを再開", style=discord.ButtonStyle.blurple)
+    async def thread_reopen(self, interaction: discord.Interaction, button: discord.ui.Button):
+        recruit = db_get_recruit(self.message_id)
+
+        if not recruit:
+            return await interaction.response.send_message("募集データなし", ephemeral=True)
+        if interaction.user.id != recruit["host"]:
+            return await interaction.response.send_message("募集主のみ使用可能", ephemeral=True)
+
+        thread_id = recruit.get("thread_id")
+        if not thread_id:
+            return await interaction.response.send_message("スレッドがまだ作成されていません", ephemeral=True)
+
+        thread = bot.get_channel(thread_id)
+        if not thread:
+            try:
+                thread = await bot.fetch_channel(thread_id)
+            except discord.NotFound:
+                return await interaction.response.send_message("スレッドが見つかりません", ephemeral=True)
+
+        await thread.edit(archived=False)
+        await interaction.response.send_message("スレッドを再開しました", ephemeral=True)
+
+    @discord.ui.button(label="募集終了", style=discord.ButtonStyle.red)
+    async def end_recruit(self, interaction: discord.Interaction, button: discord.ui.Button):
+        recruit = db_get_recruit(self.message_id)
+
+        if not recruit:
+            return await interaction.response.send_message("募集データなし", ephemeral=True)
+        if interaction.user.id != recruit["host"]:
+            return await interaction.response.send_message("募集主のみ使用可能", ephemeral=True)
+
+        confirm_view = ConfirmView(self.message_id)
+        await interaction.response.send_message(
+            "⚠️ 本当に募集を終了しますか？\nスレッドがロックされ、募集メッセージが削除されます。",
+            view=confirm_view,
+            ephemeral=True
+        )
 
 
 @bot.event
@@ -259,10 +369,6 @@ async def add_game(interaction: discord.Interaction,
                    募集チャンネル: discord.TextChannel,
                    フォーラムチャンネル: discord.ForumChannel,
                    モード: str = ""):
-    """
-    モードはカンマ区切りで入力
-    例: ランク,カジュアル,カスタム
-    """
     modes = [m.strip() for m in モード.split(",") if m.strip()] if モード else []
     db_add_game(ゲーム名, 募集チャンネル.id, フォーラムチャンネル.id, modes)
 
