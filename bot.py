@@ -162,7 +162,7 @@ def create_embed(recruit):
     )
     if mode:
         embed.add_field(name="🏷️ モード", value=mode, inline=False)
-    embed.add_field(name="👥 人数", value=f"{len(members)} / {recruit['limit']}", inline=False)
+    embed.add_field(name="👥 募集人数", value=f"{len(members)} / {recruit['limit']}", inline=False)
     embed.add_field(name="💬 一言", value=recruit["comment"], inline=False)
     embed.add_field(name="参加者", value=member_text, inline=False)
     return embed
