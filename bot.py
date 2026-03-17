@@ -9,6 +9,7 @@ TOKEN = os.getenv("TOKEN")
 
 intents = discord.Intents.default()
 intents.message_content = True
+intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # ✅ データベース初期化
@@ -200,6 +201,31 @@ async def get_thread(thread_id):
     return thread
 
 
+# ✅ 「募集参加者」ロール取得ヘルパー
+def get_recruit_role(guild: discord.Guild) -> discord.Role | None:
+    return discord.utils.get(guild.roles, name="募集参加者")
+
+
+# ✅ ロール付与ヘルパー
+async def add_recruit_role(guild: discord.Guild, user_id: int):
+    role = get_recruit_role(guild)
+    if not role:
+        return
+    member = guild.get_member(user_id) or await guild.fetch_member(user_id)
+    if member and role not in member.roles:
+        await member.add_roles(role)
+
+
+# ✅ ロール剥奪ヘルパー
+async def remove_recruit_role(guild: discord.Guild, user_id: int):
+    role = get_recruit_role(guild)
+    if not role:
+        return
+    member = guild.get_member(user_id) or await guild.fetch_member(user_id)
+    if member and role in member.roles:
+        await member.remove_roles(role)
+
+
 # ✅ 募集終了の確認ビュー
 class ConfirmView(discord.ui.View):
 
@@ -228,6 +254,12 @@ class ConfirmView(discord.ui.View):
                 await msg.delete()
             except discord.NotFound:
                 pass
+
+        # ✅ 募集主と全参加者からロールを剥奪
+        guild = interaction.guild
+        await remove_recruit_role(guild, recruit["host"])
+        for member_id in recruit["members"]:
+            await remove_recruit_role(guild, member_id)
 
         db_delete_recruit(self.message_id)
         await interaction.response.edit_message(content="✅ 募集を終了しました。", view=None)
@@ -258,6 +290,9 @@ class RecruitView(discord.ui.View):
         recruit["members"].append(interaction.user.id)
         db_save_recruit(self.message_id, recruit)
 
+        # ✅ ロール付与
+        await add_recruit_role(interaction.guild, interaction.user.id)
+
         # ✅ スレッドにメンション投稿
         thread = await get_thread(recruit.get("thread_id"))
         if thread:
@@ -278,6 +313,9 @@ class RecruitView(discord.ui.View):
 
         recruit["members"].remove(interaction.user.id)
         db_save_recruit(self.message_id, recruit)
+
+        # ✅ ロール剥奪
+        await remove_recruit_role(interaction.guild, interaction.user.id)
 
         # ✅ スレッドにメンション投稿
         thread = await get_thread(recruit.get("thread_id"))
@@ -429,6 +467,9 @@ async def recruit(interaction: discord.Interaction,
 
     recruit_data["thread_id"] = thread.thread.id
     db_save_recruit(str(msg.id), recruit_data)
+
+    # ✅ 募集主にロール付与
+    await add_recruit_role(interaction.guild, interaction.user.id)
 
     view = RecruitView(msg.id)
     await msg.edit(view=view)
