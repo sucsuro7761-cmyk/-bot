@@ -244,7 +244,7 @@ class RecruitView(discord.ui.View):
         super().__init__(timeout=None)
         self.message_id = str(message_id)
 
-    @discord.ui.button(label="参加", style=discord.ButtonStyle.green)
+    @discord.ui.button(label="参加", style=discord.ButtonStyle.green, custom_id="recruit_join")
     async def join(self, interaction: discord.Interaction, button: discord.ui.Button):
         recruit = db_get_recruit(self.message_id)
 
@@ -267,7 +267,7 @@ class RecruitView(discord.ui.View):
         await interaction.message.edit(embed=embed, view=self)
         await interaction.response.send_message("参加しました", ephemeral=True)
 
-    @discord.ui.button(label="落ち", style=discord.ButtonStyle.red)
+    @discord.ui.button(label="落ち", style=discord.ButtonStyle.red, custom_id="recruit_leave")
     async def leave(self, interaction: discord.Interaction, button: discord.ui.Button):
         recruit = db_get_recruit(self.message_id)
 
@@ -288,7 +288,7 @@ class RecruitView(discord.ui.View):
         await interaction.message.edit(embed=embed, view=self)
         await interaction.response.send_message("募集から抜けました", ephemeral=True)
 
-    @discord.ui.button(label="スレッドを閉じる", style=discord.ButtonStyle.grey)
+    @discord.ui.button(label="スレッドを閉じる", style=discord.ButtonStyle.grey, custom_id="recruit_thread_close")
     async def thread_close(self, interaction: discord.Interaction, button: discord.ui.Button):
         recruit = db_get_recruit(self.message_id)
 
@@ -304,7 +304,7 @@ class RecruitView(discord.ui.View):
         await thread.edit(archived=True)
         await interaction.response.send_message("スレッドをアーカイブしました", ephemeral=True)
 
-    @discord.ui.button(label="スレッドを再開", style=discord.ButtonStyle.blurple)
+    @discord.ui.button(label="スレッドを再開", style=discord.ButtonStyle.blurple, custom_id="recruit_thread_reopen")
     async def thread_reopen(self, interaction: discord.Interaction, button: discord.ui.Button):
         recruit = db_get_recruit(self.message_id)
 
@@ -320,7 +320,7 @@ class RecruitView(discord.ui.View):
         await thread.edit(archived=False)
         await interaction.response.send_message("スレッドを再開しました", ephemeral=True)
 
-    @discord.ui.button(label="募集終了", style=discord.ButtonStyle.red)
+    @discord.ui.button(label="募集終了", style=discord.ButtonStyle.red, custom_id="recruit_end")
     async def end_recruit(self, interaction: discord.Interaction, button: discord.ui.Button):
         recruit = db_get_recruit(self.message_id)
 
