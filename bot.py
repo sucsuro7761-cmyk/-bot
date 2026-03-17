@@ -234,9 +234,14 @@ class ConfirmView(discord.ui.View):
 
 
 class RecruitView(discord.ui.View):
-    # ※ RecruitView は変更なし（省略せずそのまま維持してください）
-    # （元のコードをそのまま使用）
-    ...
+
+    def __init__(self, message_id):          
+        super().__init__(timeout=None)
+        self.message_id = str(message_id)
+
+    @discord.ui.button(label="参加", style=discord.ButtonStyle.green)
+    async def join(self, ...):
+        ...
 
 
 @bot.event
