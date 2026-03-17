@@ -187,6 +187,19 @@ async def mode_autocomplete(interaction: discord.Interaction, current: str):
     ][:25]
 
 
+# ✅ スレッド取得ヘルパー
+async def get_thread(thread_id):
+    if not thread_id:
+        return None
+    thread = bot.get_channel(thread_id)
+    if not thread:
+        try:
+            thread = await bot.fetch_channel(thread_id)
+        except discord.NotFound:
+            return None
+    return thread
+
+
 # ✅ 募集終了の確認ビュー
 class ConfirmView(discord.ui.View):
 
@@ -203,16 +216,9 @@ class ConfirmView(discord.ui.View):
         if interaction.user.id != recruit["host"]:
             return await interaction.response.send_message("募集主のみ使用可能", ephemeral=True)
 
-        thread_id = recruit.get("thread_id")
-        if thread_id:
-            thread = bot.get_channel(thread_id)
-            if not thread:
-                try:
-                    thread = await bot.fetch_channel(thread_id)
-                except discord.NotFound:
-                    pass
-            if thread:
-                await thread.edit(archived=True, locked=True)
+        thread = await get_thread(recruit.get("thread_id"))
+        if thread:
+            await thread.edit(archived=True, locked=True)
 
         game = db_get_game(recruit["game"])
         if game:
@@ -231,7 +237,7 @@ class ConfirmView(discord.ui.View):
         await interaction.response.edit_message(content="キャンセルしました。", view=None)
 
 
-# ✅ 募集ビュー（全ボタン）
+# ✅ 募集ビュー（スレッド作成ボタンなし・参加/落ちでスレッドにメンション）
 class RecruitView(discord.ui.View):
 
     def __init__(self, message_id):
@@ -252,6 +258,11 @@ class RecruitView(discord.ui.View):
         recruit["members"].append(interaction.user.id)
         db_save_recruit(self.message_id, recruit)
 
+        # ✅ スレッドにメンション投稿
+        thread = await get_thread(recruit.get("thread_id"))
+        if thread:
+            await thread.send(f"✅ {interaction.user.mention} が参加しました！")
+
         embed = create_embed(recruit)
         await interaction.message.edit(embed=embed, view=self)
         await interaction.response.send_message("参加しました", ephemeral=True)
@@ -268,31 +279,14 @@ class RecruitView(discord.ui.View):
         recruit["members"].remove(interaction.user.id)
         db_save_recruit(self.message_id, recruit)
 
+        # ✅ スレッドにメンション投稿
+        thread = await get_thread(recruit.get("thread_id"))
+        if thread:
+            await thread.send(f"❌ {interaction.user.mention} が抜けました。")
+
         embed = create_embed(recruit)
         await interaction.message.edit(embed=embed, view=self)
         await interaction.response.send_message("募集から抜けました", ephemeral=True)
-
-    @discord.ui.button(label="スレッド作成", style=discord.ButtonStyle.blurple)
-    async def thread_create(self, interaction: discord.Interaction, button: discord.ui.Button):
-        recruit = db_get_recruit(self.message_id)
-
-        if interaction.user.id != recruit["host"]:
-            return await interaction.response.send_message("募集主のみ使用可能", ephemeral=True)
-        if recruit.get("thread_id"):
-            return await interaction.response.send_message("すでにスレッドが作成されています", ephemeral=True)
-
-        game = db_get_game(recruit["game"])
-        forum = bot.get_channel(game["forum_channel"])
-
-        thread = await forum.create_thread(
-            name=recruit["title"],
-            content=f"🎮 {recruit['title']} スレッド",
-            auto_archive_duration=60
-        )
-
-        recruit["thread_id"] = thread.thread.id
-        db_save_recruit(self.message_id, recruit)
-        await interaction.response.send_message("スレッド作成しました", ephemeral=True)
 
     @discord.ui.button(label="スレッドを閉じる", style=discord.ButtonStyle.grey)
     async def thread_close(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -303,11 +297,7 @@ class RecruitView(discord.ui.View):
         if interaction.user.id != recruit["host"]:
             return await interaction.response.send_message("募集主のみ使用可能", ephemeral=True)
 
-        thread_id = recruit.get("thread_id")
-        if not thread_id:
-            return await interaction.response.send_message("スレッドがまだ作成されていません", ephemeral=True)
-
-        thread = bot.get_channel(thread_id)
+        thread = await get_thread(recruit.get("thread_id"))
         if not thread:
             return await interaction.response.send_message("スレッドが見つかりません", ephemeral=True)
 
@@ -323,16 +313,9 @@ class RecruitView(discord.ui.View):
         if interaction.user.id != recruit["host"]:
             return await interaction.response.send_message("募集主のみ使用可能", ephemeral=True)
 
-        thread_id = recruit.get("thread_id")
-        if not thread_id:
-            return await interaction.response.send_message("スレッドがまだ作成されていません", ephemeral=True)
-
-        thread = bot.get_channel(thread_id)
+        thread = await get_thread(recruit.get("thread_id"))
         if not thread:
-            try:
-                thread = await bot.fetch_channel(thread_id)
-            except discord.NotFound:
-                return await interaction.response.send_message("スレッドが見つかりません", ephemeral=True)
+            return await interaction.response.send_message("スレッドが見つかりません", ephemeral=True)
 
         await thread.edit(archived=False)
         await interaction.response.send_message("スレッドを再開しました", ephemeral=True)
@@ -402,7 +385,7 @@ async def delete_game(interaction: discord.Interaction, ゲーム名: str):
     await interaction.response.send_message(f"✅ {ゲーム名} を削除しました", ephemeral=True)
 
 
-# ✅ 募集（ゲームオートコンプリート＋モード選択対応）
+# ✅ 募集（スレッド自動作成）
 @bot.tree.command(name="募集", description="ゲームの募集を作成")
 @app_commands.autocomplete(ゲーム=game_autocomplete, モード=mode_autocomplete)
 async def recruit(interaction: discord.Interaction,
@@ -415,6 +398,9 @@ async def recruit(interaction: discord.Interaction,
     game = db_get_game(ゲーム)
     if not game:
         return await interaction.response.send_message("ゲーム未登録", ephemeral=True)
+
+    # フォーラム作成があるためdeferで時間を確保
+    await interaction.response.defer(ephemeral=True)
 
     channel = bot.get_channel(game["recruit_channel"])
 
@@ -429,13 +415,25 @@ async def recruit(interaction: discord.Interaction,
         "mode": モード
     }
 
+    # 募集メッセージを送信
     embed = create_embed(recruit_data)
     msg = await channel.send(embed=embed)
+
+    # ✅ フォーラムスレッドを自動作成
+    forum = bot.get_channel(game["forum_channel"])
+    thread = await forum.create_thread(
+        name=募集名,
+        content=f"🎮 **{募集名}** のスレッドです！\n主催: {interaction.user.mention}",
+        auto_archive_duration=60
+    )
+
+    recruit_data["thread_id"] = thread.thread.id
+    db_save_recruit(str(msg.id), recruit_data)
+
     view = RecruitView(msg.id)
     await msg.edit(view=view)
 
-    db_save_recruit(str(msg.id), recruit_data)
-    await interaction.response.send_message("募集を作成しました", ephemeral=True)
+    await interaction.followup.send("募集を作成しました", ephemeral=True)
 
 
 bot.run(TOKEN)
