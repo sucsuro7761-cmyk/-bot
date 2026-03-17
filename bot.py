@@ -282,6 +282,8 @@ class RecruitView(discord.ui.View):
 
         if not recruit:
             return await interaction.response.send_message("募集データなし", ephemeral=True)
+        if interaction.user.id == recruit["host"]:
+            return await interaction.response.send_message("募集主は参加できません", ephemeral=True)
         if interaction.user.id in recruit["members"]:
             return await interaction.response.send_message("すでに参加しています", ephemeral=True)
         if len(recruit["members"]) >= recruit["limit"]:
@@ -308,6 +310,8 @@ class RecruitView(discord.ui.View):
 
         if not recruit:
             return await interaction.response.send_message("募集データなし", ephemeral=True)
+        if interaction.user.id == recruit["host"]:
+            return await interaction.response.send_message("募集主は使用できません", ephemeral=True)
         if interaction.user.id not in recruit["members"]:
             return await interaction.response.send_message("参加していません", ephemeral=True)
 
