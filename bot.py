@@ -182,9 +182,16 @@ async def mode_autocomplete(interaction: discord.Interaction, current: str):
     game = db_get_game(game_name)
     if not game or not game["modes"]:
         return []
+    # すでに選択済みのモードを除外
+    selected = {
+        getattr(interaction.namespace, "モード1", None),
+        getattr(interaction.namespace, "モード2", None),
+        getattr(interaction.namespace, "モード3", None),
+    }
     return [
         app_commands.Choice(name=mode, value=mode)
-        for mode in game["modes"] if current.lower() in mode.lower()
+        for mode in game["modes"]
+        if current.lower() in mode.lower() and mode not in selected
     ][:25]
 
 
@@ -387,14 +394,18 @@ async def on_ready():
         bot.add_view(RecruitView(msg_id))
 
 
-# ✅ ゲーム追加（モード追加対応）
+# ✅ ゲーム追加（モード最大5つまで個別入力）
 @bot.tree.command(name="ゲーム追加", description="ゲーム設定追加")
 async def add_game(interaction: discord.Interaction,
                    ゲーム名: str,
                    募集チャンネル: discord.TextChannel,
                    フォーラムチャンネル: discord.ForumChannel,
-                   モード: str = ""):
-    modes = [m.strip() for m in モード.split(",") if m.strip()] if モード else []
+                   モード1: str = "",
+                   モード2: str = "",
+                   モード3: str = "",
+                   モード4: str = "",
+                   モード5: str = ""):
+    modes = [m for m in [モード1, モード2, モード3, モード4, モード5] if m.strip()]
     db_add_game(ゲーム名, 募集チャンネル.id, フォーラムチャンネル.id, modes)
 
     mode_text = "、".join(modes) if modes else "なし"
