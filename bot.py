@@ -18,21 +18,15 @@ def init_db():
     c = conn.cursor()
     c.execute("""
         CREATE TABLE IF NOT EXISTS games (
-            name TEXT PRIMARY KEY,
+            guild_id INTEGER,
+            name TEXT,
             recruit_channel INTEGER,
             forum_channel INTEGER,
-            modes TEXT DEFAULT '[]'
+            modes TEXT DEFAULT '[]',
+            mention_role INTEGER DEFAULT NULL,
+            PRIMARY KEY (guild_id, name)
         )
     """)
-    try:
-        c.execute("ALTER TABLE games ADD COLUMN modes TEXT DEFAULT '[]'")
-    except sqlite3.OperationalError:
-        pass
-    try:
-        c.execute("ALTER TABLE games ADD COLUMN mention_role INTEGER DEFAULT NULL")
-    except sqlite3.OperationalError:
-        pass
-
     c.execute("""
         CREATE TABLE IF NOT EXISTS recruits (
             message_id TEXT PRIMARY KEY,
@@ -50,54 +44,54 @@ def init_db():
         c.execute("ALTER TABLE recruits ADD COLUMN mode TEXT DEFAULT ''")
     except sqlite3.OperationalError:
         pass
-
     conn.commit()
     conn.close()
 
 # ✅ ゲーム関連DB操作
-def db_add_game(name, recruit_channel, forum_channel, modes: list, mention_role: int = None):
+def db_add_game(guild_id, name, recruit_channel, forum_channel, modes: list, mention_role: int = None):
     conn = sqlite3.connect("/data/data.db")
     c = conn.cursor()
-    c.execute("INSERT OR REPLACE INTO games VALUES (?, ?, ?, ?, ?)",
-              (name, recruit_channel, forum_channel, json.dumps(modes, ensure_ascii=False), mention_role))
+    c.execute("INSERT OR REPLACE INTO games VALUES (?, ?, ?, ?, ?, ?)",
+              (guild_id, name, recruit_channel, forum_channel,
+               json.dumps(modes, ensure_ascii=False), mention_role))
     conn.commit()
     conn.close()
 
-def db_get_games():
+def db_get_games(guild_id):
     conn = sqlite3.connect("/data/data.db")
     c = conn.cursor()
-    c.execute("SELECT * FROM games")
+    c.execute("SELECT * FROM games WHERE guild_id = ?", (guild_id,))
     rows = c.fetchall()
     conn.close()
     return {
-        row[0]: {
-            "recruit_channel": row[1],
-            "forum_channel": row[2],
-            "modes": json.loads(row[3]) if row[3] else [],
-            "mention_role": row[4] if len(row) > 4 else None
+        row[1]: {
+            "recruit_channel": row[2],
+            "forum_channel": row[3],
+            "modes": json.loads(row[4]) if row[4] else [],
+            "mention_role": row[5]
         }
         for row in rows
     }
 
-def db_get_game(name):
+def db_get_game(guild_id, name):
     conn = sqlite3.connect("/data/data.db")
     c = conn.cursor()
-    c.execute("SELECT * FROM games WHERE name = ?", (name,))
+    c.execute("SELECT * FROM games WHERE guild_id = ? AND name = ?", (guild_id, name))
     row = c.fetchone()
     conn.close()
     if row:
         return {
-            "recruit_channel": row[1],
-            "forum_channel": row[2],
-            "modes": json.loads(row[3]) if row[3] else [],
-            "mention_role": row[4] if len(row) > 4 else None
+            "recruit_channel": row[2],
+            "forum_channel": row[3],
+            "modes": json.loads(row[4]) if row[4] else [],
+            "mention_role": row[5]
         }
     return None
 
-def db_delete_game(name):
+def db_delete_game(guild_id, name):
     conn = sqlite3.connect("/data/data.db")
     c = conn.cursor()
-    c.execute("DELETE FROM games WHERE name = ?", (name,))
+    c.execute("DELETE FROM games WHERE guild_id = ? AND name = ?", (guild_id, name))
     conn.commit()
     conn.close()
 
@@ -157,7 +151,11 @@ init_db()
 
 def create_embed(recruit):
     members = recruit["members"]
-    member_text = "\n".join([f"<@{m}>" for m in members]) if members else "なし"
+    host = recruit["host"]
+    all_members = [host] + [m for m in members if m != host]
+    member_text = "\n".join([
+        f"<@{m}> {'👑' if m == host else ''}" for m in all_members
+    ])
     mode = recruit.get("mode", "")
 
     embed = discord.Embed(
@@ -167,15 +165,15 @@ def create_embed(recruit):
     )
     if mode:
         embed.add_field(name="🏷️ モード", value=mode, inline=False)
-    embed.add_field(name="👥 人数", value=f"{len(members)} / {recruit['limit']}", inline=False)
+    embed.add_field(name="👥 人数", value=f"{len(members) + 1} / {recruit['limit']}", inline=False)
     embed.add_field(name="💬 一言", value=recruit["comment"], inline=False)
     embed.add_field(name="参加者", value=member_text, inline=False)
     return embed
 
 
-# ✅ オートコンプリート関数
+# ✅ オートコンプリート関数（guild_idでフィルタ）
 async def game_autocomplete(interaction: discord.Interaction, current: str):
-    games = db_get_games()
+    games = db_get_games(interaction.guild_id)
     return [
         app_commands.Choice(name=name, value=name)
         for name in games if current.lower() in name.lower()
@@ -185,19 +183,12 @@ async def mode_autocomplete(interaction: discord.Interaction, current: str):
     game_name = getattr(interaction.namespace, "ゲーム", None)
     if not game_name:
         return []
-    game = db_get_game(game_name)
+    game = db_get_game(interaction.guild_id, game_name)
     if not game or not game["modes"]:
         return []
-    # すでに選択済みのモードを除外
-    selected = {
-        getattr(interaction.namespace, "モード1", None),
-        getattr(interaction.namespace, "モード2", None),
-        getattr(interaction.namespace, "モード3", None),
-    }
     return [
         app_commands.Choice(name=mode, value=mode)
-        for mode in game["modes"]
-        if current.lower() in mode.lower() and mode not in selected
+        for mode in game["modes"] if current.lower() in mode.lower()
     ][:25]
 
 
@@ -214,12 +205,10 @@ async def get_thread(thread_id):
     return thread
 
 
-# ✅ 「募集参加者」ロール取得ヘルパー
+# ✅ 「募集参加者」ロール関連ヘルパー
 def get_recruit_role(guild: discord.Guild) -> discord.Role | None:
     return discord.utils.get(guild.roles, name="募集参加者")
 
-
-# ✅ ロール付与ヘルパー
 async def add_recruit_role(guild: discord.Guild, user_id: int):
     role = get_recruit_role(guild)
     if not role:
@@ -228,8 +217,6 @@ async def add_recruit_role(guild: discord.Guild, user_id: int):
     if member and role not in member.roles:
         await member.add_roles(role)
 
-
-# ✅ ロール剥奪ヘルパー
 async def remove_recruit_role(guild: discord.Guild, user_id: int):
     role = get_recruit_role(guild)
     if not role:
@@ -259,7 +246,7 @@ class ConfirmView(discord.ui.View):
         if thread:
             await thread.edit(archived=True, locked=True)
 
-        game = db_get_game(recruit["game"])
+        game = db_get_game(interaction.guild_id, recruit["game"])
         if game:
             channel = bot.get_channel(game["recruit_channel"])
             try:
@@ -268,7 +255,7 @@ class ConfirmView(discord.ui.View):
             except discord.NotFound:
                 pass
 
-        # ✅ 募集主と全参加者からロールを剥奪
+        # 募集主と全参加者からロールを剥奪
         guild = interaction.guild
         await remove_recruit_role(guild, recruit["host"])
         for member_id in recruit["members"]:
@@ -282,7 +269,7 @@ class ConfirmView(discord.ui.View):
         await interaction.response.edit_message(content="キャンセルしました。", view=None)
 
 
-# ✅ 募集ビュー（スレッド作成ボタンなし・参加/落ちでスレッドにメンション）
+# ✅ 募集ビュー
 class RecruitView(discord.ui.View):
 
     def __init__(self, message_id):
@@ -305,10 +292,8 @@ class RecruitView(discord.ui.View):
         recruit["members"].append(interaction.user.id)
         db_save_recruit(self.message_id, recruit)
 
-        # ✅ ロール付与
         await add_recruit_role(interaction.guild, interaction.user.id)
 
-        # ✅ スレッドにメンション投稿
         thread = await get_thread(recruit.get("thread_id"))
         if thread:
             await thread.send(f"✅ {interaction.user.mention} が参加しました！")
@@ -331,10 +316,8 @@ class RecruitView(discord.ui.View):
         recruit["members"].remove(interaction.user.id)
         db_save_recruit(self.message_id, recruit)
 
-        # ✅ ロール剥奪
         await remove_recruit_role(interaction.guild, interaction.user.id)
 
-        # ✅ スレッドにメンション投稿
         thread = await get_thread(recruit.get("thread_id"))
         if thread:
             await thread.send(f"❌ {interaction.user.mention} が抜けました。")
@@ -392,15 +375,24 @@ class RecruitView(discord.ui.View):
         )
 
 
+# ✅ ギルドごとにコマンドを同期
 @bot.event
 async def on_ready():
     print(f"起動しました {bot.user}")
-    await bot.tree.sync()
+    for guild in bot.guilds:
+        await bot.tree.sync(guild=guild)
+        print(f"  同期完了: {guild.name} ({guild.id})")
     for msg_id in db_get_all_recruits():
         bot.add_view(RecruitView(msg_id))
 
+# ✅ 新しいサーバーに追加されたときも同期
+@bot.event
+async def on_guild_join(guild: discord.Guild):
+    await bot.tree.sync(guild=guild)
+    print(f"新規サーバーに同期: {guild.name} ({guild.id})")
 
-# ✅ ゲーム追加（モード最大5つまで個別入力）
+
+# ✅ ゲーム追加
 @bot.tree.command(name="ゲーム追加", description="ゲーム設定追加")
 async def add_game(interaction: discord.Interaction,
                    ゲーム名: str,
@@ -413,8 +405,8 @@ async def add_game(interaction: discord.Interaction,
                    モード4: str = "",
                    モード5: str = ""):
     modes = [m for m in [モード1, モード2, モード3, モード4, モード5] if m.strip()]
-    db_add_game(ゲーム名, 募集チャンネル.id, フォーラムチャンネル.id, modes,
-                メンションロール.id if メンションロール else None)
+    db_add_game(interaction.guild_id, ゲーム名, 募集チャンネル.id, フォーラムチャンネル.id,
+                modes, メンションロール.id if メンションロール else None)
 
     mode_text = "、".join(modes) if modes else "なし"
     role_text = メンションロール.mention if メンションロール else "なし"
@@ -425,7 +417,7 @@ async def add_game(interaction: discord.Interaction,
 
 @bot.tree.command(name="ゲーム一覧", description="登録済みゲーム一覧を表示")
 async def game_list(interaction: discord.Interaction):
-    games = db_get_games()
+    games = db_get_games(interaction.guild_id)
     if not games:
         return await interaction.response.send_message("ゲームなし")
 
@@ -442,11 +434,19 @@ async def game_list(interaction: discord.Interaction):
 @bot.tree.command(name="ゲーム削除", description="登録済みゲームを削除")
 @app_commands.autocomplete(ゲーム名=game_autocomplete)
 async def delete_game(interaction: discord.Interaction, ゲーム名: str):
-    game = db_get_game(ゲーム名)
+    game = db_get_game(interaction.guild_id, ゲーム名)
     if not game:
         return await interaction.response.send_message("そのゲームは登録されていません", ephemeral=True)
-    db_delete_game(ゲーム名)
+    db_delete_game(interaction.guild_id, ゲーム名)
     await interaction.response.send_message(f"✅ {ゲーム名} を削除しました", ephemeral=True)
+
+@bot.tree.command(name="db初期化", description="DBをリセット（管理者専用）")
+@app_commands.default_permissions(administrator=True)
+async def reset_db(interaction: discord.Interaction):
+    import os
+    os.remove("/data/data.db")
+    init_db()
+    await interaction.response.send_message("✅ DBをリセットしました", ephemeral=True)
 
 
 # ✅ 募集（スレッド自動作成）
@@ -459,11 +459,10 @@ async def recruit(interaction: discord.Interaction,
                   一言: str,
                   モード: str = ""):
 
-    game = db_get_game(ゲーム)
+    game = db_get_game(interaction.guild_id, ゲーム)
     if not game:
         return await interaction.response.send_message("ゲーム未登録", ephemeral=True)
 
-    # フォーラム作成があるためdeferで時間を確保
     await interaction.response.defer(ephemeral=True)
 
     channel = bot.get_channel(game["recruit_channel"])
@@ -479,13 +478,11 @@ async def recruit(interaction: discord.Interaction,
         "mode": モード
     }
 
-    # 募集メッセージを送信（ロールメンション付き）
     embed = create_embed(recruit_data)
     mention_role_id = game.get("mention_role")
     mention_text = f"<@&{mention_role_id}>" if mention_role_id else None
     msg = await channel.send(content=mention_text, embed=embed)
 
-    # ✅ フォーラムスレッドを自動作成
     forum = bot.get_channel(game["forum_channel"])
     thread = await forum.create_thread(
         name=募集名,
@@ -496,21 +493,12 @@ async def recruit(interaction: discord.Interaction,
     recruit_data["thread_id"] = thread.thread.id
     db_save_recruit(str(msg.id), recruit_data)
 
-    # ✅ 募集主にロール付与
     await add_recruit_role(interaction.guild, interaction.user.id)
 
     view = RecruitView(msg.id)
     await msg.edit(view=view)
 
     await interaction.followup.send("募集を作成しました", ephemeral=True)
-
-@bot.tree.command(name="db初期化", description="DBをリセット（管理者専用）")
-@app_commands.default_permissions(administrator=True)
-async def reset_db(interaction: discord.Interaction):
-    import os
-    os.remove("/data/data.db")
-    init_db()
-    await interaction.response.send_message("✅ DBをリセットしました", ephemeral=True)
 
 
 bot.run(TOKEN)
