@@ -380,6 +380,7 @@ class RecruitView(discord.ui.View):
 async def on_ready():
     print(f"起動しました {bot.user}")
     for guild in bot.guilds:
+        bot.tree.copy_global_to(guild=guild)  # グローバルコマンドをギルドにコピー
         await bot.tree.sync(guild=guild)
         print(f"  同期完了: {guild.name} ({guild.id})")
     for msg_id in db_get_all_recruits():
@@ -388,6 +389,7 @@ async def on_ready():
 # ✅ 新しいサーバーに追加されたときも同期
 @bot.event
 async def on_guild_join(guild: discord.Guild):
+    bot.tree.copy_global_to(guild=guild)
     await bot.tree.sync(guild=guild)
     print(f"新規サーバーに同期: {guild.name} ({guild.id})")
 
@@ -439,14 +441,6 @@ async def delete_game(interaction: discord.Interaction, ゲーム名: str):
         return await interaction.response.send_message("そのゲームは登録されていません", ephemeral=True)
     db_delete_game(interaction.guild_id, ゲーム名)
     await interaction.response.send_message(f"✅ {ゲーム名} を削除しました", ephemeral=True)
-
-@bot.tree.command(name="db初期化", description="DBをリセット（管理者専用）")
-@app_commands.default_permissions(administrator=True)
-async def reset_db(interaction: discord.Interaction):
-    import os
-    os.remove("/data/data.db")
-    init_db()
-    await interaction.response.send_message("✅ DBをリセットしました", ephemeral=True)
 
 
 # ✅ 募集（スレッド自動作成）
