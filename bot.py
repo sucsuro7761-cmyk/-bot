@@ -379,11 +379,14 @@ class RecruitView(discord.ui.View):
 @bot.event
 async def on_ready():
     print(f"起動しました {bot.user}")
-    # グローバルコマンドを全削除（重複防止）
+    # グローバルコマンドを全削除
     bot.tree.clear_commands(guild=None)
     await bot.tree.sync()
-    # ギルドごとに同期
+    # ギルドごとに古いコマンドをクリアして再同期
     for guild in bot.guilds:
+        bot.tree.clear_commands(guild=guild)
+        await bot.tree.sync(guild=guild)
+        print(f"  古いコマンドをクリア: {guild.name} ({guild.id})")
         bot.tree.copy_global_to(guild=guild)
         await bot.tree.sync(guild=guild)
         print(f"  同期完了: {guild.name} ({guild.id})")
