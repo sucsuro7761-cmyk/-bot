@@ -504,5 +504,13 @@ async def recruit(interaction: discord.Interaction,
 
     await interaction.followup.send("募集を作成しました", ephemeral=True)
 
+@bot.tree.command(name="db初期化", description="DBをリセット（管理者専用）")
+@app_commands.default_permissions(administrator=True)
+async def reset_db(interaction: discord.Interaction):
+    import os
+    os.remove("/data/data.db")
+    init_db()
+    await interaction.response.send_message("✅ DBをリセットしました", ephemeral=True)
+
 
 bot.run(TOKEN)
