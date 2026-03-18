@@ -375,30 +375,14 @@ class RecruitView(discord.ui.View):
         )
 
 
-# ✅ ギルドごとにコマンドを同期
+# ✅ グローバルにコマンドを同期
 @bot.event
 async def on_ready():
     print(f"起動しました {bot.user}")
-    # グローバルコマンドを全削除
-    bot.tree.clear_commands(guild=None)
     await bot.tree.sync()
-    # ギルドごとに古いコマンドをクリアして再同期
-    for guild in bot.guilds:
-        bot.tree.clear_commands(guild=guild)
-        await bot.tree.sync(guild=guild)
-        print(f"  古いコマンドをクリア: {guild.name} ({guild.id})")
-        bot.tree.copy_global_to(guild=guild)
-        await bot.tree.sync(guild=guild)
-        print(f"  同期完了: {guild.name} ({guild.id})")
+    print("コマンド同期完了")
     for msg_id in db_get_all_recruits():
         bot.add_view(RecruitView(msg_id))
-
-# ✅ 新しいサーバーに追加されたときも同期
-@bot.event
-async def on_guild_join(guild: discord.Guild):
-    bot.tree.copy_global_to(guild=guild)
-    await bot.tree.sync(guild=guild)
-    print(f"新規サーバーに同期: {guild.name} ({guild.id})")
 
 
 # ✅ ゲーム追加
