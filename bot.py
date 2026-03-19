@@ -493,7 +493,7 @@ async def delete_game(interaction: discord.Interaction, ゲーム名: str):
 async def recruit(interaction: discord.Interaction,
                   ゲーム: str,
                   募集名: str,
-                  人数: int,
+                  遊ぶ人数: int,
                   一言: str,
                   モード: str = ""):
 
