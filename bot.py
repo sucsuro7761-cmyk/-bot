@@ -44,6 +44,10 @@ def init_db():
         c.execute("ALTER TABLE recruits ADD COLUMN mode TEXT DEFAULT ''")
     except sqlite3.OperationalError:
         pass
+    try:
+        c.execute("ALTER TABLE recruits ADD COLUMN guests INTEGER DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass
     conn.commit()
     conn.close()
 
@@ -99,7 +103,7 @@ def db_delete_game(guild_id, name):
 def db_save_recruit(message_id, recruit):
     conn = sqlite3.connect("/data/data.db")
     c = conn.cursor()
-    c.execute("INSERT OR REPLACE INTO recruits VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", (
+    c.execute("INSERT OR REPLACE INTO recruits VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (
         str(message_id),
         recruit["host"],
         recruit["game"],
@@ -108,7 +112,8 @@ def db_save_recruit(message_id, recruit):
         json.dumps(recruit["members"]),
         recruit["comment"],
         recruit.get("thread_id"),
-        recruit.get("mode", "")
+        recruit.get("mode", ""),
+        recruit.get("guests", 0)
     ))
     conn.commit()
     conn.close()
@@ -128,7 +133,8 @@ def db_get_recruit(message_id):
             "members": json.loads(row[5]),
             "comment": row[6],
             "thread_id": row[7],
-            "mode": row[8] if len(row) > 8 else ""
+            "mode": row[8] if len(row) > 8 else "",
+            "guests": row[9] if len(row) > 9 else 0
         }
     return None
 
@@ -152,11 +158,13 @@ init_db()
 def create_embed(recruit):
     members = recruit["members"]
     host = recruit["host"]
+    guests = recruit.get("guests", 0)
     all_members = [host] + [m for m in members if m != host]
-    member_text = "\n".join([
-        f"<@{m}> {'👑' if m == host else ''}" for m in all_members
-    ])
+    member_lines = [f"<@{m}> {'👑' if m == host else ''}" for m in all_members]
+    member_lines += ["No name 👤"] * guests
+    member_text = "\n".join(member_lines) if member_lines else "なし"
     mode = recruit.get("mode", "")
+    total = len(members) + 1 + guests  # 参加者 + 募集主 + ゲスト
 
     embed = discord.Embed(
         title=f"🎮 {recruit['game']}募集",
@@ -165,7 +173,7 @@ def create_embed(recruit):
     )
     if mode:
         embed.add_field(name="🏷️ モード", value=mode, inline=False)
-    embed.add_field(name="👥 人数", value=f"{len(members) + 1} / {recruit['limit']}", inline=False)
+    embed.add_field(name="👥 人数", value=f"{total} / {recruit['limit']}", inline=False)
     embed.add_field(name="💬 一言", value=recruit["comment"], inline=False)
     embed.add_field(name="参加者", value=member_text, inline=False)
     return embed
@@ -326,6 +334,51 @@ class RecruitView(discord.ui.View):
         await interaction.message.edit(embed=embed, view=self)
         await interaction.response.send_message("募集から抜けました", ephemeral=True)
 
+    @discord.ui.button(label="お友達参加", style=discord.ButtonStyle.green, custom_id="recruit_guest_join")
+    async def guest_join(self, interaction: discord.Interaction, button: discord.ui.Button):
+        recruit = db_get_recruit(self.message_id)
+
+        if not recruit:
+            return await interaction.response.send_message("募集データなし", ephemeral=True)
+
+        guests = recruit.get("guests", 0)
+        total = len(recruit["members"]) + 1 + guests
+        if total >= recruit["limit"]:
+            return await interaction.response.send_message("満員です", ephemeral=True)
+
+        recruit["guests"] = guests + 1
+        db_save_recruit(self.message_id, recruit)
+
+        thread = await get_thread(recruit.get("thread_id"))
+        if thread:
+            await thread.send(f"✅ {interaction.user.mention} がお友達を追加しました！")
+
+        embed = create_embed(recruit)
+        await interaction.message.edit(embed=embed, view=self)
+        await interaction.response.send_message("お友達を追加しました", ephemeral=True)
+
+    @discord.ui.button(label="お友達落ち", style=discord.ButtonStyle.red, custom_id="recruit_guest_leave")
+    async def guest_leave(self, interaction: discord.Interaction, button: discord.ui.Button):
+        recruit = db_get_recruit(self.message_id)
+
+        if not recruit:
+            return await interaction.response.send_message("募集データなし", ephemeral=True)
+
+        guests = recruit.get("guests", 0)
+        if guests <= 0:
+            return await interaction.response.send_message("お友達参加者がいません", ephemeral=True)
+
+        recruit["guests"] = guests - 1
+        db_save_recruit(self.message_id, recruit)
+
+        thread = await get_thread(recruit.get("thread_id"))
+        if thread:
+            await thread.send(f"❌ {interaction.user.mention} がお友達を1名キャンセルしました。")
+
+        embed = create_embed(recruit)
+        await interaction.message.edit(embed=embed, view=self)
+        await interaction.response.send_message("お友達をキャンセルしました", ephemeral=True)
+
     @discord.ui.button(label="スレッドを閉じる", style=discord.ButtonStyle.grey, custom_id="recruit_thread_close")
     async def thread_close(self, interaction: discord.Interaction, button: discord.ui.Button):
         recruit = db_get_recruit(self.message_id)
@@ -456,11 +509,12 @@ async def recruit(interaction: discord.Interaction,
         "host": interaction.user.id,
         "game": ゲーム,
         "title": 募集名,
-        "limit": 募集人数,
+        "limit": 人数,
         "members": [],
         "comment": 一言,
         "thread_id": None,
-        "mode": モード
+        "mode": モード,
+        "guests": 0
     }
 
     embed = create_embed(recruit_data)
