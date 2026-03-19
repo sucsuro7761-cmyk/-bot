@@ -181,11 +181,15 @@ def create_embed(recruit):
 
 # ✅ オートコンプリート関数（guild_idでフィルタ）
 async def game_autocomplete(interaction: discord.Interaction, current: str):
-    games = db_get_games(interaction.guild_id)
-    return [
-        app_commands.Choice(name=name, value=name)
-        for name in games if current.lower() in name.lower()
-    ][:25]
+    try:
+        games = db_get_games(interaction.guild_id)
+        return [
+            app_commands.Choice(name=name, value=name)
+            for name in games if current.lower() in name.lower()
+        ][:25]
+    except Exception as e:
+        print(f"game_autocomplete エラー: {e}")
+        return []
 
 async def mode_autocomplete(interaction: discord.Interaction, current: str):
     game_name = getattr(interaction.namespace, "ゲーム", None)
