@@ -4,6 +4,8 @@ from discord import app_commands
 import sqlite3
 import json
 import os
+import asyncio
+import time
 
 TOKEN = os.getenv("TOKEN")
 
@@ -37,17 +39,18 @@ def init_db():
             members TEXT,
             comment TEXT,
             thread_id INTEGER,
-            mode TEXT DEFAULT ''
+            mode TEXT DEFAULT '',
+            guests INTEGER DEFAULT 0,
+            guild_id INTEGER DEFAULT NULL,
+            end_time REAL DEFAULT NULL
         )
     """)
-    try:
-        c.execute("ALTER TABLE recruits ADD COLUMN mode TEXT DEFAULT ''")
-    except sqlite3.OperationalError:
-        pass
-    try:
-        c.execute("ALTER TABLE recruits ADD COLUMN guests INTEGER DEFAULT 0")
-    except sqlite3.OperationalError:
-        pass
+    for col in ["mode TEXT DEFAULT ''", "guests INTEGER DEFAULT 0",
+                "guild_id INTEGER DEFAULT NULL", "end_time REAL DEFAULT NULL"]:
+        try:
+            c.execute(f"ALTER TABLE recruits ADD COLUMN {col}")
+        except sqlite3.OperationalError:
+            pass
     conn.commit()
     conn.close()
 
@@ -103,7 +106,7 @@ def db_delete_game(guild_id, name):
 def db_save_recruit(message_id, recruit):
     conn = sqlite3.connect("/data/data.db")
     c = conn.cursor()
-    c.execute("INSERT OR REPLACE INTO recruits VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (
+    c.execute("INSERT OR REPLACE INTO recruits VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (
         str(message_id),
         recruit["host"],
         recruit["game"],
@@ -113,7 +116,9 @@ def db_save_recruit(message_id, recruit):
         recruit["comment"],
         recruit.get("thread_id"),
         recruit.get("mode", ""),
-        recruit.get("guests", 0)
+        recruit.get("guests", 0),
+        recruit.get("guild_id"),
+        recruit.get("end_time")
     ))
     conn.commit()
     conn.close()
@@ -134,7 +139,9 @@ def db_get_recruit(message_id):
             "comment": row[6],
             "thread_id": row[7],
             "mode": row[8] if len(row) > 8 else "",
-            "guests": row[9] if len(row) > 9 else 0
+            "guests": row[9] if len(row) > 9 else 0,
+            "guild_id": row[10] if len(row) > 10 else None,
+            "end_time": row[11] if len(row) > 11 else None
         }
     return None
 
@@ -164,7 +171,8 @@ def create_embed(recruit):
     member_lines += ["No name 👤"] * guests
     member_text = "\n".join(member_lines) if member_lines else "なし"
     mode = recruit.get("mode", "")
-    total = len(members) + 1 + guests  # 参加者 + 募集主 + ゲスト
+    total = len(members) + 1 + guests
+    end_time = recruit.get("end_time")
 
     embed = discord.Embed(
         title=f"🎮 {recruit['game']}募集",
@@ -174,12 +182,14 @@ def create_embed(recruit):
     if mode:
         embed.add_field(name="🏷️ モード", value=mode, inline=False)
     embed.add_field(name="👥 人数", value=f"{total} / {recruit['limit']}", inline=False)
+    if end_time:
+        embed.add_field(name="⏰ 募集終了", value=f"<t:{int(end_time)}:R>", inline=False)
     embed.add_field(name="💬 一言", value=recruit["comment"], inline=False)
     embed.add_field(name="参加者", value=member_text, inline=False)
     return embed
 
 
-# ✅ オートコンプリート関数（guild_idでフィルタ）
+# ✅ オートコンプリート関数
 async def game_autocomplete(interaction: discord.Interaction, current: str):
     try:
         games = db_get_games(interaction.guild_id)
@@ -238,6 +248,71 @@ async def remove_recruit_role(guild: discord.Guild, user_id: int):
         await member.remove_roles(role)
 
 
+# ✅ 募集自動終了処理
+async def auto_end_recruit(message_id: str):
+    recruit = db_get_recruit(message_id)
+    if not recruit:
+        return
+
+    guild_id = recruit.get("guild_id")
+    if not guild_id:
+        return
+    guild = bot.get_guild(guild_id)
+    if not guild:
+        return
+
+    # スレッドをアーカイブ
+    thread = await get_thread(recruit.get("thread_id"))
+    if thread:
+        try:
+            await thread.send("⏰ 募集時間が終了しました。スレッドをアーカイブします。")
+            await thread.edit(archived=True)
+        except Exception:
+            pass
+
+    # 1時間後に募集を完全終了
+    await asyncio.sleep(3600)
+
+    recruit = db_get_recruit(message_id)
+    if not recruit:
+        return
+
+    # スレッドをロック
+    thread = await get_thread(recruit.get("thread_id"))
+    if thread:
+        try:
+            await thread.edit(archived=True, locked=True)
+        except Exception:
+            pass
+
+    # 募集メッセージを削除
+    game = db_get_game(guild_id, recruit["game"])
+    if game:
+        channel = bot.get_channel(game["recruit_channel"])
+        if channel:
+            try:
+                msg = await channel.fetch_message(int(message_id))
+                await msg.delete()
+            except discord.NotFound:
+                pass
+
+    # ロールを剥奪
+    await remove_recruit_role(guild, recruit["host"])
+    for member_id in recruit["members"]:
+        await remove_recruit_role(guild, member_id)
+
+    db_delete_recruit(message_id)
+    print(f"募集自動終了: {message_id}")
+
+
+# ✅ タイマースケジュール（残り時間を計算して再スケジュール）
+async def schedule_recruit_timer(message_id: str, end_time: float):
+    remaining = end_time - time.time()
+    if remaining > 0:
+        await asyncio.sleep(remaining)
+    await auto_end_recruit(message_id)
+
+
 # ✅ 募集終了の確認ビュー
 class ConfirmView(discord.ui.View):
 
@@ -267,7 +342,6 @@ class ConfirmView(discord.ui.View):
             except discord.NotFound:
                 pass
 
-        # 募集主と全参加者からロールを剥奪
         guild = interaction.guild
         await remove_recruit_role(guild, recruit["host"])
         for member_id in recruit["members"]:
@@ -281,7 +355,7 @@ class ConfirmView(discord.ui.View):
         await interaction.response.edit_message(content="キャンセルしました。", view=None)
 
 
-# ✅ 募集ビュー
+# ✅ 募集ビュー（スレッドを閉じるボタン削除）
 class RecruitView(discord.ui.View):
 
     def __init__(self, message_id):
@@ -298,7 +372,7 @@ class RecruitView(discord.ui.View):
             return await interaction.response.send_message("募集主は参加できません", ephemeral=True)
         if interaction.user.id in recruit["members"]:
             return await interaction.response.send_message("すでに参加しています", ephemeral=True)
-        if len(recruit["members"]) >= recruit["limit"]:
+        if len(recruit["members"]) + 1 + recruit.get("guests", 0) >= recruit["limit"]:
             return await interaction.response.send_message("満員です", ephemeral=True)
 
         recruit["members"].append(interaction.user.id)
@@ -383,22 +457,6 @@ class RecruitView(discord.ui.View):
         await interaction.message.edit(embed=embed, view=self)
         await interaction.response.send_message("お友達をキャンセルしました", ephemeral=True)
 
-    @discord.ui.button(label="スレッドを閉じる", style=discord.ButtonStyle.grey, custom_id="recruit_thread_close")
-    async def thread_close(self, interaction: discord.Interaction, button: discord.ui.Button):
-        recruit = db_get_recruit(self.message_id)
-
-        if not recruit:
-            return await interaction.response.send_message("募集データなし", ephemeral=True)
-        if interaction.user.id != recruit["host"]:
-            return await interaction.response.send_message("募集主のみ使用可能", ephemeral=True)
-
-        thread = await get_thread(recruit.get("thread_id"))
-        if not thread:
-            return await interaction.response.send_message("スレッドが見つかりません", ephemeral=True)
-
-        await thread.edit(archived=True)
-        await interaction.response.send_message("スレッドをアーカイブしました", ephemeral=True)
-
     @discord.ui.button(label="スレッドを再開", style=discord.ButtonStyle.blurple, custom_id="recruit_thread_reopen")
     async def thread_reopen(self, interaction: discord.Interaction, button: discord.ui.Button):
         recruit = db_get_recruit(self.message_id)
@@ -432,7 +490,7 @@ class RecruitView(discord.ui.View):
         )
 
 
-# ✅ グローバルにコマンドを同期
+# ✅ グローバルにコマンドを同期・タイマー復元
 @bot.event
 async def on_ready():
     print(f"起動しました {bot.user}")
@@ -440,6 +498,11 @@ async def on_ready():
     print("コマンド同期完了")
     for msg_id in db_get_all_recruits():
         bot.add_view(RecruitView(msg_id))
+        # Bot再起動後にタイマーを復元
+        recruit = db_get_recruit(msg_id)
+        if recruit and recruit.get("end_time"):
+            asyncio.create_task(schedule_recruit_timer(msg_id, recruit["end_time"]))
+            print(f"タイマー復元: {msg_id}")
 
 
 # ✅ ゲーム追加
@@ -491,7 +554,7 @@ async def delete_game(interaction: discord.Interaction, ゲーム名: str):
     await interaction.response.send_message(f"✅ {ゲーム名} を削除しました", ephemeral=True)
 
 
-# ✅ 募集（スレッド自動作成）
+# ✅ 募集（募集時間対応）
 @bot.tree.command(name="募集", description="ゲームの募集を作成")
 @app_commands.autocomplete(ゲーム=game_autocomplete, モード=mode_autocomplete)
 async def recruit(interaction: discord.Interaction,
@@ -499,15 +562,19 @@ async def recruit(interaction: discord.Interaction,
                   募集名: str,
                   遊ぶ人数: int,
                   一言: str,
+                  募集時間: int,
                   モード: str = ""):
 
     game = db_get_game(interaction.guild_id, ゲーム)
     if not game:
         return await interaction.response.send_message("ゲーム未登録", ephemeral=True)
+    if 募集時間 <= 0:
+        return await interaction.response.send_message("募集時間は1分以上で設定してください", ephemeral=True)
 
     await interaction.response.defer(ephemeral=True)
 
     channel = bot.get_channel(game["recruit_channel"])
+    end_time = time.time() + 募集時間 * 60  # 分 → 秒に変換
 
     recruit_data = {
         "host": interaction.user.id,
@@ -518,7 +585,9 @@ async def recruit(interaction: discord.Interaction,
         "comment": 一言,
         "thread_id": None,
         "mode": モード,
-        "guests": 0
+        "guests": 0,
+        "guild_id": interaction.guild_id,
+        "end_time": end_time
     }
 
     embed = create_embed(recruit_data)
@@ -529,7 +598,7 @@ async def recruit(interaction: discord.Interaction,
     forum = bot.get_channel(game["forum_channel"])
     thread = await forum.create_thread(
         name=募集名,
-        content=f"🎮 **{募集名}** のスレッドです！\n主催: {interaction.user.mention}",
+        content=f"🎮 **{募集名}** のスレッドです！\n主催: {interaction.user.mention}\n⏰ 募集時間: {募集時間}分",
         auto_archive_duration=60
     )
 
@@ -541,7 +610,10 @@ async def recruit(interaction: discord.Interaction,
     view = RecruitView(msg.id)
     await msg.edit(view=view)
 
-    await interaction.followup.send("募集を作成しました", ephemeral=True)
+    # タイマー開始
+    asyncio.create_task(schedule_recruit_timer(str(msg.id), end_time))
+
+    await interaction.followup.send(f"✅ 募集を作成しました（募集時間: {募集時間}分）", ephemeral=True)
 
 
 bot.run(TOKEN)
