@@ -336,6 +336,54 @@ async def timer_loop():
         await asyncio.sleep(30)  # 30秒ごとにチェック
 
 
+# ✅ 募集延長の時間選択ビュー
+class ExtendView(discord.ui.View):
+
+    def __init__(self, message_id):
+        super().__init__(timeout=30)
+        self.message_id = str(message_id)
+
+    async def do_extend(self, interaction: discord.Interaction, minutes: int):
+        recruit = db_get_recruit(self.message_id)
+        if not recruit:
+            return await interaction.response.edit_message(content="募集データなし", view=None)
+
+        current_end = recruit.get("end_time") or time.time()
+        # すでに終了時間を過ぎている場合は現在時刻から延長
+        new_end = max(current_end, time.time()) + minutes * 60
+        recruit["end_time"] = new_end
+        db_save_recruit(self.message_id, recruit)
+
+        # embedを更新
+        game = db_get_game(interaction.guild_id, recruit["game"])
+        if game:
+            channel = bot.get_channel(game["recruit_channel"])
+            if channel:
+                try:
+                    msg = await channel.fetch_message(int(self.message_id))
+                    embed = create_embed(recruit)
+                    await msg.edit(embed=embed)
+                except discord.NotFound:
+                    pass
+
+        await interaction.response.edit_message(
+            content=f"✅ 募集を{minutes}分延長しました！\n終了: <t:{int(new_end)}:R>",
+            view=None
+        )
+
+    @discord.ui.button(label="10分", style=discord.ButtonStyle.blurple)
+    async def extend_10(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.do_extend(interaction, 10)
+
+    @discord.ui.button(label="30分", style=discord.ButtonStyle.blurple)
+    async def extend_30(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.do_extend(interaction, 30)
+
+    @discord.ui.button(label="60分", style=discord.ButtonStyle.blurple)
+    async def extend_60(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.do_extend(interaction, 60)
+
+
 # ✅ 募集終了の確認ビュー
 class ConfirmView(discord.ui.View):
 
@@ -495,6 +543,22 @@ class RecruitView(discord.ui.View):
 
         await thread.edit(archived=False)
         await interaction.response.send_message("スレッドを再開しました", ephemeral=True)
+
+    @discord.ui.button(label="募集延長", style=discord.ButtonStyle.blurple, custom_id="recruit_extend")
+    async def extend_recruit(self, interaction: discord.Interaction, button: discord.ui.Button):
+        recruit = db_get_recruit(self.message_id)
+
+        if not recruit:
+            return await interaction.response.send_message("募集データなし", ephemeral=True)
+        if interaction.user.id != recruit["host"]:
+            return await interaction.response.send_message("募集主のみ使用可能", ephemeral=True)
+
+        extend_view = ExtendView(self.message_id)
+        await interaction.response.send_message(
+            "⏰ 何分延長しますか？",
+            view=extend_view,
+            ephemeral=True
+        )
 
     @discord.ui.button(label="募集終了", style=discord.ButtonStyle.red, custom_id="recruit_end")
     async def end_recruit(self, interaction: discord.Interaction, button: discord.ui.Button):
