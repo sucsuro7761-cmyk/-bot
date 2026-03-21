@@ -46,7 +46,8 @@ def init_db():
         )
     """)
     for col in ["mode TEXT DEFAULT ''", "guests INTEGER DEFAULT 0",
-                "guild_id INTEGER DEFAULT NULL", "end_time REAL DEFAULT NULL"]:
+                "guild_id INTEGER DEFAULT NULL", "end_time REAL DEFAULT NULL",
+                "archived_at REAL DEFAULT NULL"]:
         try:
             c.execute(f"ALTER TABLE recruits ADD COLUMN {col}")
         except sqlite3.OperationalError:
@@ -106,7 +107,7 @@ def db_delete_game(guild_id, name):
 def db_save_recruit(message_id, recruit):
     conn = sqlite3.connect("/data/data.db")
     c = conn.cursor()
-    c.execute("INSERT OR REPLACE INTO recruits VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (
+    c.execute("INSERT OR REPLACE INTO recruits VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (
         str(message_id),
         recruit["host"],
         recruit["game"],
@@ -118,7 +119,8 @@ def db_save_recruit(message_id, recruit):
         recruit.get("mode", ""),
         recruit.get("guests", 0),
         recruit.get("guild_id"),
-        recruit.get("end_time")
+        recruit.get("end_time"),
+        recruit.get("archived_at")
     ))
     conn.commit()
     conn.close()
@@ -141,7 +143,8 @@ def db_get_recruit(message_id):
             "mode": row[8] if len(row) > 8 else "",
             "guests": row[9] if len(row) > 9 else 0,
             "guild_id": row[10] if len(row) > 10 else None,
-            "end_time": row[11] if len(row) > 11 else None
+            "end_time": row[11] if len(row) > 11 else None,
+            "archived_at": row[12] if len(row) > 12 else None
         }
     return None
 
@@ -305,8 +308,6 @@ async def auto_end_recruit(message_id: str, is_archive: bool = True):
 async def timer_loop():
     await bot.wait_until_ready()
     print("[タイマー] 監視ループ開始")
-    # アーカイブ済みフラグをメモリで管理
-    archived_ids: set = set()
     while not bot.is_closed():
         try:
             now = time.time()
@@ -317,23 +318,25 @@ async def timer_loop():
                 end_time = recruit.get("end_time")
                 if not end_time:
                     continue
+                archived_at = recruit.get("archived_at")
 
-                # 募集時間終了 → スレッドアーカイブ
-                if now >= end_time and msg_id not in archived_ids:
+                # 募集時間終了 → スレッドアーカイブ（まだアーカイブしていない場合）
+                if now >= end_time and not archived_at:
                     print(f"[タイマー] 募集時間終了検知: {msg_id}")
-                    archived_ids.add(msg_id)
+                    # archived_atをDBに保存してから処理
+                    recruit["archived_at"] = now
+                    db_save_recruit(msg_id, recruit)
                     asyncio.create_task(auto_end_recruit(msg_id, is_archive=True))
 
                 # アーカイブから1時間後 → 完全終了
-                if now >= end_time + 3600 and msg_id in archived_ids:
+                elif archived_at and now >= archived_at + 3600:
                     print(f"[タイマー] 完全終了検知: {msg_id}")
-                    archived_ids.discard(msg_id)
                     asyncio.create_task(auto_end_recruit(msg_id, is_archive=False))
 
         except Exception as e:
             print(f"[タイマー] ループエラー: {e}")
 
-        await asyncio.sleep(30)  # 30秒ごとにチェック
+        await asyncio.sleep(30)
 
 
 # ✅ 募集延長の時間選択ビュー
