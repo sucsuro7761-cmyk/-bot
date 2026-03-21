@@ -249,68 +249,91 @@ async def remove_recruit_role(guild: discord.Guild, user_id: int):
 
 
 # ✅ 募集自動終了処理
-async def auto_end_recruit(message_id: str):
-    recruit = db_get_recruit(message_id)
-    if not recruit:
-        return
+async def auto_end_recruit(message_id: str, is_archive: bool = True):
+    try:
+        recruit = db_get_recruit(message_id)
+        if not recruit:
+            return
 
-    guild_id = recruit.get("guild_id")
-    if not guild_id:
-        return
-    guild = bot.get_guild(guild_id)
-    if not guild:
-        return
+        guild_id = recruit.get("guild_id")
+        guild = bot.get_guild(guild_id) if guild_id else None
 
-    # スレッドをアーカイブ
-    thread = await get_thread(recruit.get("thread_id"))
-    if thread:
+        if is_archive:
+            # スレッドをアーカイブ
+            thread = await get_thread(recruit.get("thread_id"))
+            if thread:
+                try:
+                    await thread.send("⏰ 募集時間が終了しました。スレッドをアーカイブします。")
+                    await thread.edit(archived=True)
+                    print(f"[タイマー] スレッドアーカイブ完了: {message_id}")
+                except Exception as e:
+                    print(f"[タイマー] スレッドアーカイブ失敗: {e}")
+        else:
+            # 完全終了
+            thread = await get_thread(recruit.get("thread_id"))
+            if thread:
+                try:
+                    await thread.edit(archived=True, locked=True)
+                except Exception as e:
+                    print(f"[タイマー] スレッドロック失敗: {e}")
+
+            if guild:
+                game = db_get_game(guild_id, recruit["game"])
+                if game:
+                    channel = bot.get_channel(game["recruit_channel"])
+                    if channel:
+                        try:
+                            msg = await channel.fetch_message(int(message_id))
+                            await msg.delete()
+                        except discord.NotFound:
+                            pass
+                        except Exception as e:
+                            print(f"[タイマー] メッセージ削除失敗: {e}")
+
+                await remove_recruit_role(guild, recruit["host"])
+                for member_id in recruit["members"]:
+                    await remove_recruit_role(guild, member_id)
+
+            db_delete_recruit(message_id)
+            print(f"[タイマー] 募集自動終了完了: {message_id}")
+
+    except Exception as e:
+        print(f"[タイマー] 予期しないエラー: {e}")
+
+
+# ✅ タイマー監視ループ（30秒ごとにDBをチェック）
+async def timer_loop():
+    await bot.wait_until_ready()
+    print("[タイマー] 監視ループ開始")
+    # アーカイブ済みフラグをメモリで管理
+    archived_ids: set = set()
+    while not bot.is_closed():
         try:
-            await thread.send("⏰ 募集時間が終了しました。スレッドをアーカイブします。")
-            await thread.edit(archived=True)
-        except Exception:
-            pass
+            now = time.time()
+            for msg_id in db_get_all_recruits():
+                recruit = db_get_recruit(msg_id)
+                if not recruit:
+                    continue
+                end_time = recruit.get("end_time")
+                if not end_time:
+                    continue
 
-    # 1時間後に募集を完全終了
-    await asyncio.sleep(3600)
+                # 募集時間終了 → スレッドアーカイブ
+                if now >= end_time and msg_id not in archived_ids:
+                    print(f"[タイマー] 募集時間終了検知: {msg_id}")
+                    archived_ids.add(msg_id)
+                    asyncio.create_task(auto_end_recruit(msg_id, is_archive=True))
 
-    recruit = db_get_recruit(message_id)
-    if not recruit:
-        return
+                # アーカイブから1時間後 → 完全終了
+                if now >= end_time + 3600 and msg_id in archived_ids:
+                    print(f"[タイマー] 完全終了検知: {msg_id}")
+                    archived_ids.discard(msg_id)
+                    asyncio.create_task(auto_end_recruit(msg_id, is_archive=False))
 
-    # スレッドをロック
-    thread = await get_thread(recruit.get("thread_id"))
-    if thread:
-        try:
-            await thread.edit(archived=True, locked=True)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[タイマー] ループエラー: {e}")
 
-    # 募集メッセージを削除
-    game = db_get_game(guild_id, recruit["game"])
-    if game:
-        channel = bot.get_channel(game["recruit_channel"])
-        if channel:
-            try:
-                msg = await channel.fetch_message(int(message_id))
-                await msg.delete()
-            except discord.NotFound:
-                pass
-
-    # ロールを剥奪
-    await remove_recruit_role(guild, recruit["host"])
-    for member_id in recruit["members"]:
-        await remove_recruit_role(guild, member_id)
-
-    db_delete_recruit(message_id)
-    print(f"募集自動終了: {message_id}")
-
-
-# ✅ タイマースケジュール（残り時間を計算して再スケジュール）
-async def schedule_recruit_timer(message_id: str, end_time: float):
-    remaining = end_time - time.time()
-    if remaining > 0:
-        await asyncio.sleep(remaining)
-    await auto_end_recruit(message_id)
+        await asyncio.sleep(30)  # 30秒ごとにチェック
 
 
 # ✅ 募集終了の確認ビュー
@@ -490,7 +513,7 @@ class RecruitView(discord.ui.View):
         )
 
 
-# ✅ グローバルにコマンドを同期・タイマー復元
+# ✅ グローバルにコマンドを同期・タイマーループ起動
 @bot.event
 async def on_ready():
     print(f"起動しました {bot.user}")
@@ -498,11 +521,8 @@ async def on_ready():
     print("コマンド同期完了")
     for msg_id in db_get_all_recruits():
         bot.add_view(RecruitView(msg_id))
-        # Bot再起動後にタイマーを復元
-        recruit = db_get_recruit(msg_id)
-        if recruit and recruit.get("end_time"):
-            asyncio.create_task(schedule_recruit_timer(msg_id, recruit["end_time"]))
-            print(f"タイマー復元: {msg_id}")
+    # タイマー監視ループを起動
+    asyncio.create_task(timer_loop())
 
 
 # ✅ ゲーム追加
@@ -609,9 +629,6 @@ async def recruit(interaction: discord.Interaction,
 
     view = RecruitView(msg.id)
     await msg.edit(view=view)
-
-    # タイマー開始
-    asyncio.create_task(schedule_recruit_timer(str(msg.id), end_time))
 
     await interaction.followup.send(f"✅ 募集を作成しました（募集時間: {募集時間}分）", ephemeral=True)
 
